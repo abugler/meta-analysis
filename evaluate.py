@@ -1,57 +1,86 @@
 import json
+import time
 import os
 import glob
+from tqdm import tqdm
 from shutil import rmtree
-from nussl.evaluation import BSSEvalScale, aggregate_score_files, report_card()
+# from concurrent.futures import ThreadPoolExecutor
+from nussl.evaluation import BSSEvalScale, BSSEvalV4, aggregate_score_files, report_card
 from torch.utils.data import DataLoader
 
+from numpy.linalg import LinAlgError
 
 RESULTS_DIR = 'results'
 
-def evaluate(model, dataset, device='cuda'):
+def evaluate(model, dataset, num_workers=0, device='cuda'):
     """
     Assumptions:
      - Each model will output a dictionary of estimated sources, as AudioSignals.
        (Therefore, it will be required to write a wrapper for each model)
+     - The model should already be on the desired device.
     """
-    dataloader = DataLoader(dataset)
-    model_name = type(model).__name__
+    model_name = model.name
     dataset_name = type(dataset).__name__
 
     results_dir = os.path.join(RESULTS_DIR, model_name, dataset_name)
     if os.path.isdir(results_dir):
         rmtree(results_dir)
     os.makedirs(results_dir)
-
-    for idx, batch in enumerate(dataloader):
+    # with ThreadPoolExecutor(max_workers=num_workers) as pool:
+    #     futures = []
+    for idx, batch in tqdm(enumerate(dataset),
+                        desc="Evaluating",
+                        total=len(dataset)):
         _evaluate_one(model, idx, batch, results_dir, device)
+        # TODO: Concurrency was giving me a hard time...
+        #       Fix it later
+        # future = pool.submit(
+        #     _evaluate_one, model, idx, batch, results_dir, device
+        # )
+        #     futures.append(future)
+        # print("Waiting for threads to finish...")
+        # while futures:
+        #     while futures and futures[0].done():
+        #         futures.pop(0)
+        #     time.sleep(1)
+        #     print(f"{len(futures)} jobs remaining...")
     json_files = glob.glob(f"{results_dir}/*.json")
     df = aggregate_score_files(json_files)
-    report_card = report_card(
-        df, notes="Testing on sine waves", report_each_source=True)
-    print(report_card)
-    with open(os.path.join(results_dir, 'report_card.txt')) as f:
-        f.write(report_card)
+    report = report_card(
+        df, notes=f"Testing model {type(model_name)}", report_each_source=True)
+    print(report)
+    with open(os.path.join(results_dir, 'report_card.txt'), 'a') as f:
+        f.write(report)
     df.to_csv(os.path.join(results_dir, 'aggreggate.csv'))
 
 def _evaluate_one(model, idx, batch, results_dir, device):
     mix = batch['mix'].to(device) # this will be torch tensor.
     sources = batch['sources'] # this will not be
     estimates = model(mix)
+    source_names = list(sources.keys())
     src_list = []
     est_list = []
-    for key in sources.keys():
+    # TODO: When one of the sources is empty, identify it,
+    #       and label it as a broken example.
+    for key in source_names:
         src_list.append(sources[key])
         est_list.append(estimates[key])
-    scores = BSSEvalScale(
-        src_list,
-        est_list,
-        source_labels=list(sources.keys())).evaluate()
+    try:
+        scores = BSSEvalV4(
+            src_list, est_list,
+            source_labels=source_names,
+            compute_permutation=False).evaluate()
+        scores.update(BSSEvalScale(
+            src_list,
+            est_list,
+            source_labels=source_names,
+            compute_permutation=False).evaluate())
+    except (LinAlgError, ValueError):
+        # a source must be empty...
+        return
     output_path = os.path.join(
         results_dir, f"{idx}.json"
     )
     with open(output_path, 'w') as f:
         json.dump(scores, f)
-
-
 

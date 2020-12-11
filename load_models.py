@@ -11,6 +11,8 @@ import torch.nn as nn
 from collections import OrderedDict
 from torch.nn import ModuleDict
 from demucs.utils import load_model as load_demucs_or_tasnet, apply_model
+from demucs.model import Demucs
+from demucs.tasnet import ConvTasNet
 from open_unmix import test as unmix_test
 from wave_u_net.waveunet import Waveunet
 from wave_u_net.utils import load_model as load_waveunet, DataParallel
@@ -21,7 +23,15 @@ torch.no_grad()
 
 checkpoints = "checkpoints"
 
-class FB_Wrapper(nn.Module):
+class ModelWrapper(nn.Module):
+    """
+    Parent Wrapper Class for turning model output into a
+    source dictionary.
+
+    Parent Class used for type checking.
+    """
+
+class FB_Wrapper(ModelWrapper):
     """
     Wraps models that were trained for the Demucs paper.
     Returns a dictionary of audio signals
@@ -30,9 +40,19 @@ class FB_Wrapper(nn.Module):
     def __init__(self, model):
         super().__init__()
         self.model = model
+        if isinstance(model, Demucs):
+            self.name = "Demucs"
+        elif isinstance(model, ConvTasNet):
+            self.name = "ConvTasNet"
+        else:
+            ValueError("A non-facebook model was passed to this wrapper!")
 
     def forward(self, mix):
+        # Whitening was found in the evaluation script...
+        ref = mix.mean(dim=0)
+        mix = (mix - ref.mean()) / ref.std()
         x = apply_model(self.model, mix)
+        x = x * ref.std() + ref.mean()
         x = self.demucs_to_audiosignal(x)
         return x
 
@@ -46,7 +66,7 @@ class FB_Wrapper(nn.Module):
         }
         return est
 
-class OpenUnmixWrapper(nn.Module):
+class OpenUnmixWrapper(ModelWrapper):
     """
     Wraps OpenUnmix.
     Returns a dictionary of audio signals
@@ -57,6 +77,7 @@ class OpenUnmixWrapper(nn.Module):
         self.targets = ['bass', 'drums', 'other', 'vocals']
         self.model_dict = ModuleDict()
         self.stft_params = None
+        self.name = "OpenUnmix"
         for target in self.targets:
             self.model_dict[target] = unmix_test.load_model(
                 target, model_path, device='cuda'
@@ -93,14 +114,17 @@ class OpenUnmixWrapper(nn.Module):
                 audio_data_array=audio_data, sample_rate=44_100)
         return estimated
 
-class WaveUNetWrapper(nn.Module):
+class WaveUNetWrapper(ModelWrapper):
     def __init__(self, model):
         super().__init__()
         self.model = model
+        self.name = "Wave-U-Net"
 
     def forward(self, mix):
         """
         Taken from Wave-U-Net-Pytorch/test.py
+
+        # NOTE: WaveUNet does not use Whitening
         """
         def compute_model_output(inputs):
             all_outputs = {}
