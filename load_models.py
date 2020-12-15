@@ -90,6 +90,7 @@ class OpenUnmixWrapper(ModelWrapper):
                 )
 
     def forward(self, mix):
+        mix = mix.unsqueeze(0)
         mask_dict = OrderedDict()
         for key, model in self.model_dict.items():
             est = model(mix)
@@ -104,7 +105,7 @@ class OpenUnmixWrapper(ModelWrapper):
 
         masks = np.stack(list(mask_dict.values()), axis=-1)
         est_stft = torch.tensor(wiener(
-            masks, mix.astype(np.complex128), eps=1e-7, use_softmask=True
+            masks, mix.astype(np.complex128), eps=1e-7, use_softmask=False
         )).cuda()
         est_signal = model.stft.inverse(est_stft.permute(3, 2, 1, 0))
         estimated = {}

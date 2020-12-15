@@ -24,6 +24,12 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
 
     results_dir = os.path.join(RESULTS_DIR, model_name, dataset_name)
     if os.path.isdir(results_dir):
+        destroy = None
+        while destroy not in ["yes", "no"]:
+            destroy = input("Previous results found. Delete them? (Type 'yes' or 'no')")
+        if destroy == "no":
+            print("Ending run...")
+            return 
         rmtree(results_dir)
     os.makedirs(results_dir)
     # with ThreadPoolExecutor(max_workers=num_workers) as pool:
@@ -70,14 +76,20 @@ def _evaluate_one(model, idx, batch, results_dir, device):
             src_list, est_list,
             source_labels=source_names,
             compute_permutation=False).evaluate()
-        scores.update(BSSEvalScale(
+        scale_scores = BSSEvalScale(
             src_list,
             est_list,
             source_labels=source_names,
-            compute_permutation=False).evaluate())
+            compute_permutation=False).evaluate()
     except (LinAlgError, ValueError):
         # a source must be empty...
+        # code may also reach this point if the estimated and ground truth are not the same
+        # length. In this case, crop the input signal to be the same length as the output.
         return
+    for source in scores.keys():
+        if source in ['combination', 'permutation']:
+            continue
+        scores[source].update(scale_scores[source])
     output_path = os.path.join(
         results_dir, f"{idx}.json"
     )
