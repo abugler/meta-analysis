@@ -4,7 +4,6 @@ import os
 import glob
 from tqdm import tqdm
 from shutil import rmtree
-# from concurrent.futures import ThreadPoolExecutor
 from nussl.evaluation import BSSEvalScale, BSSEvalV4, aggregate_score_files, report_card
 from torch.utils.data import DataLoader
 
