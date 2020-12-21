@@ -22,13 +22,15 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
     dataset_name = type(dataset).__name__
 
     results_dir = os.path.join(RESULTS_DIR, model_name, dataset_name)
+    if dataset.toy:
+        results_dir += f"_toy{dataset.toy}"
     if os.path.isdir(results_dir):
         destroy = None
         while destroy not in ["yes", "no"]:
             destroy = input("Previous results found. Delete them? (Type 'yes' or 'no')")
         if destroy == "no":
             print("Ending run...")
-            return 
+            return
         rmtree(results_dir)
     os.makedirs(results_dir)
     # with ThreadPoolExecutor(max_workers=num_workers) as pool:
@@ -60,6 +62,9 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
 
 def _evaluate_one(model, idx, batch, results_dir, device):
     mix = batch['mix'].to(device) # this will be torch tensor.
+    # if mix.abs().sum() < 1e-8:
+    #     print(f"Chunk {idx} appears to be silent.")
+    #     return
     sources = batch['sources'] # this will not be
     estimates = model(mix)
     source_names = list(sources.keys())
@@ -67,6 +72,7 @@ def _evaluate_one(model, idx, batch, results_dir, device):
     est_list = []
     # TODO: When one of the sources is empty, identify it,
     #       and label it as a broken example.
+
     for key in source_names:
         src_list.append(sources[key])
         est_list.append(estimates[key])
@@ -80,10 +86,12 @@ def _evaluate_one(model, idx, batch, results_dir, device):
             est_list,
             source_labels=source_names,
             compute_permutation=False).evaluate()
-    except (LinAlgError, ValueError):
+    except (LinAlgError, ValueError) as e:
         # a source must be empty...
         # code may also reach this point if the estimated and ground truth are not the same
         # length. In this case, crop the input signal to be the same length as the output.
+        print(f"Error with chunk {idx}")
+        print(e)
         return
     for source in scores.keys():
         if source in ['combination', 'permutation']:
