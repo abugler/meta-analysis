@@ -11,10 +11,10 @@ We evaluate the pretrained models, Demucs, Conv-TasNet, Wave-U-Net, and OpenUnmi
 Since evaluation and aggregation methods may differ from paper to paper, we define our evaluation and aggregation here:
 1. Create chunks of each stem in the MUSDB18 test set. Each chunk is 8 seconds long, with a 4 second hop between each chunk.
 2. Remove all chunks where at least one source is silent. This is done by finding the reference chunk with the peak power for a source, then labeling all chunks that have power less than 8db than the reference to be silent.
-3. Input the mix of each chunk into the network, and measure the metrics of the separated sources, including but not limited to, SI-SDR, SDR, SI-SDRi, SAR, SI-SAR. We only calculate these metrics on a single window.
+3. Input the mix of each chunk into the network, and measure the metrics of the separated sources, including but not limited to, SI-SDR, SDR, SI-SDRi, SAR, SI-SAR. We only calculate these metrics on a single window for our final aggregations.
 
 ## Our aggregation method
-We wish to get the following values for each model: Mean and Median metric for each source, and Mean and Median metric over all sources. We call these the source-specific metrics, and the source-aggregated metrics.
+We wish to get the following values for each model: Mean and Median metric for each source, and Mean and Median metric over all sources. We call these the source-specific metrics, and the source-aggregated metrics, respectively.
 ### Source-specific metrics
 To calculate the mean/median source-specific metric, find the mean/median of the recorded metric of each chunk.
 
