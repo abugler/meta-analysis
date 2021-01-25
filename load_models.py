@@ -5,6 +5,7 @@ All models are for a sample_rate of 44.1kHz
 Luckily for us, open_unmix has a STFT built in.
 """
 import os
+from yaml import safe_load
 import numpy as np
 import torch
 import torch.nn as nn
@@ -17,6 +18,9 @@ from open_unmix import test as unmix_test
 from wave_u_net.waveunet import Waveunet
 from wave_u_net.utils import load_model as load_waveunet, DataParallel
 from nussl import AudioSignal, STFTParams
+from lasaft.source_separation.conditioned.cunet.models.dcun_tfc_gpocm_lasaft import DCUN_TFC_GPoCM_LaSAFT_Framework as LaSAFT
+from lasaft.data.musdb_wrapper.datasets import SingleTrackSet
+from nussl.separation.benchmark import IdealRatioMask
 from norbert import wiener
 
 torch.no_grad()
@@ -175,21 +179,100 @@ class WaveUNetWrapper(ModelWrapper):
 
         return output_audio_signal
 
+
+class IdealRatioMaskWrapper():
+    """
+    A Wrapper to the nussl implementation of IdealRatioMask
+    mix is a torch.tensor with batch size 1.
+    sources is a dictionary of AudioSignals
+
+    Args:
+      stft_params (nussl.STFTParams): STFTParams for the mask.
+      **kwargs (dict): kwargs for IdealRatioMask object.
+    """
+    def __init__(self, stft_params=None, **kwargs):
+        if stft_params is None:
+            stft_params = STFTParams(
+                window_length=512,
+                hop_length=128,
+                window_type='sqrt_hann'
+            )
+        self.name = "IRM"
+        self.stft_params = stft_params
+        self.kwargs = kwargs
+
+    def __call__(self, mix, sources):
+        mix = AudioSignal(audio_data_array=mix.detach().numpy(),
+                          sample_rate=44_100,
+                          stft_params=self.stft_params)
+        for signal in sources.values():
+            signal.stft_params = self.stft_params
+        sep = IdealRatioMask(mix, sources, **self.kwargs)
+        estimates = sep()
+        # sources are sorted alphabetically by the IRM object
+        source_names = sorted(list(sources.keys()))
+        return {k: estimates[i] for i, k in enumerate(source_names)}
+
+    def to(self, *args, **kwargs):
+        pass
+
+
+class LaSAFTWrapper(ModelWrapper):
+    """
+    A wrapper for the LaSAFT model, from the paper
+    LaSAFT: Latent Source Attentive Frequency Transformation for Conditioned Source Separation
+
+    TODO: trim lasaft package down.
+    """
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+        self.model.eval()
+        self.name = "LaSAFT"
+
+    def forward(self, mix):
+        mix = mix.T
+        sources = {}
+        for source_name in ['drums', 'vocals', 'bass', 'other']:
+            db = SingleTrackSet(mix, self.model.hop_length, self.model.num_frame)
+            input_condition = torch.tensor(
+                np.array(db.source_names.index(source_name)),
+                dtype=torch.long,
+                device=self.model.device
+            ).view(1)
+            source = np.concatenate(
+                [
+                    self.model.separate(
+                        item.unsqueeze(0).to(self.model.device),
+                        input_condition)[0]
+                        [self.model.trim_length:-self.model.trim_length].detach().cpu().numpy()
+                    for item in db
+                ],
+                axis=0
+            )
+            sources[source_name] = source
+        return sources
+
 """
-############################################################
-# These last four are to be called from outside the class. #
-############################################################
+###############################################################################
+# These remainder of these functions are to be called from outside the class. #
+###############################################################################
 """
+
+
 def demucs():
     model = load_demucs_or_tasnet(os.path.join(checkpoints, "demucs_extra.th"))
     return FB_Wrapper(model)
+
 
 def tasnet():
     model = load_demucs_or_tasnet(os.path.join(checkpoints, "tasnet_extra.th"))
     return FB_Wrapper(model)
 
+
 def open_unmix():
     return OpenUnmixWrapper(os.path.join(checkpoints, "open-unmix"))
+
 
 def wav_u_net(num_samples):
     instruments = ["bass", "drums", "other", "vocals"]
@@ -197,13 +280,11 @@ def wav_u_net(num_samples):
     load_model = 'checkpoints/waveunet/model'
     levels = 6
     depth = 1
-    sr = 44100
     channels = 2
     kernel_size = 5
     strides = 4
     conv_type = 'gn'
     res = 'fixed'
-    feature_growth = 'double'
     separate = 1
     num_features = [features*2**i for i in range(0, levels)]
     model = Waveunet(channels, num_features, channels,
@@ -217,11 +298,25 @@ def wav_u_net(num_samples):
     load_waveunet(model, None, load_model, True)
     return WaveUNetWrapper(model)
 
+
+def lasaft():
+    with open("./lasaft/model_args.yaml") as file:
+        args = safe_load(file)
+    model = LaSAFT(**args)
+    model.load_from_checkpoint(os.path.join('checkpoints', 'gpocm_lasaft.ckpt'))
+    return LaSAFTWrapper(model)
+
+
+def ideal_ratio_mask(**kwargs):
+    return IdealRatioMaskWrapper(**kwargs)
+
 if __name__ == "__main__":
     # This is basically a weak test
     demucs()
     tasnet()
     o = open_unmix()
-    o(torch.zeros(1, 2, 20000).cuda())
+    o(torch.zeros(2, 20000).cuda())
     wav_u_net(44_100)
+    ls = lasaft()
+    ls(torch.zeros((2, 441_000), dtype=torch.float32))
     print("loaded all models sucessfully :D")

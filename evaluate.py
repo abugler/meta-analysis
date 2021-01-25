@@ -1,15 +1,16 @@
 import json
-import time
 import os
 import glob
 from tqdm import tqdm
 from shutil import rmtree
 from nussl.evaluation import BSSEvalScale, BSSEvalV4, aggregate_score_files, report_card
 from torch.utils.data import DataLoader
+from load_models import IdealRatioMaskWrapper
 
 from numpy.linalg import LinAlgError
 
 RESULTS_DIR = 'results'
+
 
 def evaluate(model, dataset, num_workers=0, device='cuda'):
     """
@@ -19,7 +20,7 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
      - The model should already be on the desired device.
     """
     model_name = model.name
-    dataset_name = type(dataset).__name__
+    dataset_name = type(dataset).__name__ + "_" + dataset.subset
 
     results_dir = os.path.join(RESULTS_DIR, model_name, dataset_name)
     if dataset.toy:
@@ -36,8 +37,9 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
     # with ThreadPoolExecutor(max_workers=num_workers) as pool:
     #     futures = []
     for idx, batch in tqdm(enumerate(dataset),
-                        desc="Evaluating",
-                        total=len(dataset)):
+                           desc="Evaluating",
+                           total=len(dataset)):
+        # End debugging statements
         _evaluate_one(model, idx, batch, results_dir, device)
         # TODO: Concurrency was giving me a hard time...
         #       Fix it later
@@ -62,11 +64,11 @@ def evaluate(model, dataset, num_workers=0, device='cuda'):
 
 def _evaluate_one(model, idx, batch, results_dir, device):
     mix = batch['mix'].to(device) # this will be torch tensor.
-    # if mix.abs().sum() < 1e-8:
-    #     print(f"Chunk {idx} appears to be silent.")
-    #     return
     sources = batch['sources'] # this will not be
-    estimates = model(mix)
+    if isinstance(model, IdealRatioMaskWrapper):
+        estimates = model(mix, sources)
+    else:
+        estimates = model(mix)
     source_names = list(sources.keys())
     src_list = []
     est_list = []
@@ -77,13 +79,13 @@ def _evaluate_one(model, idx, batch, results_dir, device):
         src_list.append(sources[key])
         est_list.append(estimates[key])
     try:
-        scores = BSSEvalV4(
+        # There is no reason to use V4,
+        # scores = BSSEvalV4(
+        #     src_list, est_list,
+        #     source_labels=source_names,
+        #     compute_permutation=False).evaluate()
+        scores = BSSEvalScale(
             src_list, est_list,
-            source_labels=source_names,
-            compute_permutation=False).evaluate()
-        scale_scores = BSSEvalScale(
-            src_list,
-            est_list,
             source_labels=source_names,
             compute_permutation=False).evaluate()
     except (LinAlgError, ValueError) as e:
@@ -93,10 +95,10 @@ def _evaluate_one(model, idx, batch, results_dir, device):
         print(f"Error with chunk {idx}")
         print(e)
         return
-    for source in scores.keys():
-        if source in ['combination', 'permutation']:
-            continue
-        scores[source].update(scale_scores[source])
+    # for source in scores.keys():
+    #     if source in ['combination', 'permutation']:
+    #         continue
+        # scores[source].update(scale_scores[source])
     output_path = os.path.join(
         results_dir, f"{idx}.json"
     )

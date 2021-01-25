@@ -16,6 +16,7 @@ with predetermined locations where there exists noise.
 root = "/exports/projects/computer-audition/data/musdb/raw/stems/"
 segmentation_file = "segmentation.npy"
 
+
 class MUSDB18Segmented(MUSDB18):
     """
     Generates a list of segments in each track where each source has sound.
@@ -24,6 +25,12 @@ class MUSDB18Segmented(MUSDB18):
      - Sample rate is 44.1kHz
      - Stereo
 
+    __getitem__ also returns the following:
+     - 'mix' (torch.Tensor): A torch tensor representing the mix.
+        Has shape (channels, samples)
+     - 'sources' (dict): Dictionary with the key-value pairing of source name
+        to an audio signal containing the source.
+
     Args:
       segment_length (int): Length in samples of each segment.
       segment_hop (int): Distance between each possible start of segment.
@@ -31,21 +38,37 @@ class MUSDB18Segmented(MUSDB18):
         as silence
       toy (int): Number of tracks to load. (Make this small for a "toy" dataset)
         if None, load all tracks.
+      load_seg (bool): Whether to load segmentation files. If False, segmentation
+        files will be computed.
+      save_seg (bool): Whether to save computed segmentation files. Cannot be True
+        if `toy` is not None. If `load_seg=True`, then this option will do nothing.
+      subset (str): Subset to use for evaluation. Defaults to `test`. Due to
+        limitations in how segmentation files are computed, `train` and `test`
+        cannot be ran at the same time.
       kwargs (dict): Arguments to ``nussl.datasets.MUSDB18``.
     """
     def __init__(self, segment_length=352_800, segment_hop=176_400,
-                 top_db=8, load_seg=False, save_seg=False, toy=None, **kwargs):
+                 top_db=8, load_seg=False, save_seg=False, toy=None,
+                 subset: str = "test", **kwargs):
         self.segment_length = segment_length
         self.segment_hop = segment_hop
         self.top_db = top_db
         self.toy = toy
         self.load_seg = load_seg
         self.save_seg = save_seg
+        self.subset = subset
+        subsets = [subset]
+        if 'subsets' in kwargs.keys():
+            raise ValueError("""
+                The MUSDB18 kwarg `subsets` cannot be assigned.
+                Please use `subset` instead.
+            """)
+        self.segmentation_file = f"{subset}_{segmentation_file}"
         if save_seg and toy is not None:
             raise ValueError("Segmentations will only be saved if toy is None.")
         if load_seg:
             self.load_segmentations()
-        super().__init__(**kwargs)
+        super().__init__(subsets=subsets, **kwargs)
         if load_seg:
             self.musdb.tracks = sorted(self.musdb.tracks, key=lambda t: t.path)
 
@@ -91,11 +114,11 @@ class MUSDB18Segmented(MUSDB18):
                 [self.segment_mappings, self.segments, self.num_intervals],
                 dtype=object
             )
-            np.save(segmentation_file, data)
+            np.save(self.segmentation_file, data)
 
     def load_segmentations(self):
         self.segment_mappings, self.segments, self.num_intervals = \
-            np.load(segmentation_file, allow_pickle=True)
+            np.load(self.segmentation_file, allow_pickle=True)
         if self.toy is None:
             return
         # remove extraneous tracks, if only some tracks will be loaded via toy.
@@ -117,7 +140,7 @@ class MUSDB18Segmented(MUSDB18):
         curr_idx = -1
         # This could be a binary search, but it is not worth it.
         keys = self.segment_mappings.keys()
-        for key in keys: # keys are sorted
+        for key in keys:  # keys are sorted
             if item >= key:
                 curr_idx += 1
             else: break
@@ -165,5 +188,7 @@ class MUSDB18Segmented(MUSDB18):
 
 if __name__ == "__main__":
     # This populates a segmentation file.
-    musdb = MUSDB18Segmented(folder=root, is_wav=False, subsets=['test'], save_seg=True)
-    # musdb = MUSDB18Segmented(folder=root, is_wav=False, load_seg=True, save_seg=False, subsets=['test'], toy=1)
+    # musdb = MUSDB18Segmented(folder=root, is_wav=False, subsets=['test'], save_seg=True)
+    musdb = MUSDB18Segmented(folder=root, is_wav=False, load_seg=True,
+                             save_seg=False, subset='test', toy=1)
+    musdb[0]
