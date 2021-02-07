@@ -142,5 +142,6 @@ checkpoints/
 
 # vscode
 .vscode
-results
 
+# results json
+results/**/*.json
